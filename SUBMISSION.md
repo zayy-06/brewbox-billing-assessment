@@ -73,4 +73,4 @@ The following targeted tests passed on their respective branches:
 - **Purpose:** Understanding requirements, reviewing implementation, debugging test failures, and preparing documentation.
 - **Verification:** Ran the targeted tests listed above on their respective branches.
 - **What I can explain independently:** The implementation decisions, relevant business rules, edge cases, and test results for each ticket.
-- **Repository/assignment disclosure:** I confirm I did not paste the entire repository or assignment into an AI tool: **Yes, if accurate.**
+- **Repository/assignment disclosure:** I confirm I did not paste the entire repository or assignment into an AI tool: **Yes.**
