@@ -95,6 +95,8 @@ class BillingService:
         discount = Decimal(str(discount_percent))
         if discount < 0:
             raise ValueError("discount cannot be negative")
+        if discount > Decimal("30"):
+            raise ValueError("discount cannot exceed 30 percent")
 
         subscription = Subscription(
             id=self.repo.next_id("sub"),
@@ -164,10 +166,9 @@ class BillingService:
             for code in subscription.addon_codes
         ]
         subtotal = money(plan_amount + sum((amount for _, amount in addon_amounts), Decimal("0")))
-
-        # Discount is currently calculated from the whole recurring subtotal.
+        # BUG-101: Discounts apply to the plan amount only, not add-ons.
         discount_total = money(
-            subtotal * subscription.discount_percent / Decimal("100")
+            plan_amount * subscription.discount_percent / Decimal("100")
         )
         taxable = money(subtotal - discount_total)
         tax_total = money(taxable * TAX_RATE)
