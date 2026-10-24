@@ -152,21 +152,37 @@ class BillingService:
         issued = issued_on or self._today()
         plan = self.repo.plans[subscription.plan_code]
 
-        # Mid-month starts use a simple 30-day convention. Add-ons are charged
-        # in full on the first invoice.
+        # Mid-month starts use actual calendar days.
         if subscription.start_date <= period_start:
             factor = Decimal("1")
         else:
-            billable_days = (period_end - subscription.start_date).days
-            factor = Decimal(billable_days) / Decimal("30")
+            billable_days = self._active_days(
+                subscription, period_start, period_end
+            )
+            days_in_month = Decimal(
+                str(calendar.monthrange(year, month)[1])
+            )
+            factor = Decimal(billable_days) / days_in_month
 
         plan_amount = money(plan.monthly_price * factor)
         addon_amounts = [
-            (self.repo.addons[code], money(self.repo.addons[code].monthly_price))
+            (
+                self.repo.addons[code],
+                money(self.repo.addons[code].monthly_price * factor),
+            )
             for code in subscription.addon_codes
         ]
+<<<<<<< HEAD
         subtotal = money(plan_amount + sum((amount for _, amount in addon_amounts), Decimal("0")))
         # BUG-101: Discounts apply to the plan amount only, not add-ons.
+=======
+        subtotal = money(
+            plan_amount
+            + sum((amount for _, amount in addon_amounts), Decimal("0"))
+        )
+
+        # Discount is currently calculated from the whole recurring subtotal.
+>>>>>>> bugfix/BUG-102-calendar-proration
         discount_total = money(
             plan_amount * subscription.discount_percent / Decimal("100")
         )
