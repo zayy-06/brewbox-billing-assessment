@@ -6,7 +6,10 @@ from decimal import Decimal
 from typing import Callable
 
 from .models import (
+    CREDIT_VALID_DAYS,
     LATE_FEE,
+    MAX_REFERRAL_CREDIT,
+    REFERRAL_RATE,
     TAX_RATE,
     CreditEntry,
     Customer,
@@ -59,6 +62,14 @@ class BillingService:
             raise ValueError("referral code already in use")
         if referred_by is not None:
             referred_by = referred_by.strip().upper()
+            # FEAT-202: reject self-referral and unknown referral codes.
+            if referred_by == referral_code:
+                raise ValueError("self-referral is not allowed")
+            referrer = self.repo.customer_by_referral_code(referred_by)
+            if referrer is None:
+                raise ValueError(
+                    f"unknown referral code: {referred_by!r}"
+                )
 
         customer = Customer(
             id=self.repo.next_id("cus"),
@@ -256,10 +267,20 @@ class BillingService:
         return invoice
 
     def credit_balance(self, customer_id: str, as_of: date | None = None) -> Decimal:
-        return Decimal("0.00")
+        """Return the total remaining balance of non-expired credits for a customer."""
+        day = as_of or self._today()
+        total = Decimal("0.00")
+        for entry in self.repo.credits.values():
+            if entry.customer_id == customer_id and entry.expires_on >= day:
+                total += entry.remaining
+        return money(total)
 
     def list_credits(self, customer_id: str) -> list[CreditEntry]:
-        return []
+        """Return all credit entries for a customer, ordered by expiry (oldest first)."""
+        entries = [
+            e for e in self.repo.credits.values() if e.customer_id == customer_id
+        ]
+        return sorted(entries, key=lambda e: e.expires_on)
 
     # ------------------------------------------------------------------
     # Pause / resume
@@ -316,7 +337,96 @@ class BillingService:
         return None
 
     def _apply_available_credits(self, invoice: Invoice, as_of: date) -> None:
-        return None
+        """Apply valid (non-expired) credits to a newly-issued invoice.
+
+        Rules (client-threads.md Thread 4):
+        - Credits applied after tax, oldest-expiry first.
+        - Amount due floors at zero; unused credit remains on the ledger.
+        - Invoice is NOT automatically marked paid even if amount_due == 0.
+        """
+        customer_id = invoice.customer_id
+        # Collect non-expired credits with remaining balance, oldest expiry first.
+        eligible = sorted(
+            (
+                e
+                for e in self.repo.credits.values()
+                if e.customer_id == customer_id
+                and e.expires_on >= as_of
+                and e.remaining > 0
+            ),
+            key=lambda e: e.expires_on,
+        )
+        remaining_due = invoice.amount_due
+        for entry in eligible:
+            if remaining_due <= 0:
+                break
+            applied = min(entry.remaining, remaining_due)
+            entry.remaining = money(entry.remaining - applied)
+            invoice.credit_applied = money(invoice.credit_applied + applied)
+            remaining_due = money(remaining_due - applied)
 
     def _award_referral_credit(self, invoice: Invoice, paid_on: date) -> None:
-        return None
+        """Award a referral credit to the referrer when referee's first invoice is paid.
+
+        Rules (client-threads.md Thread 4):
+        - Award only on the referee's FIRST fully-paid invoice.
+        - Base = pre-tax subtotal minus discount (plan + add-ons); exclude tax,
+          late fees, and any amount covered by existing credits.
+        - Rate = 10%, cap $50, round half-up.
+        - One credit per referee — no second award on later invoices.
+        - Credit expires 365 days after issue.
+        """
+        # Identify the subscription to find the customer.
+        subscription = self.repo.subscriptions.get(invoice.subscription_id)
+        if subscription is None:
+            return
+
+        customer = self.repo.customers.get(subscription.customer_id)
+        if customer is None or customer.referred_by is None:
+            return
+
+        # Check whether a credit has already been awarded for this customer.
+        already_awarded = any(
+            e.source_customer_id == customer.id
+            for e in self.repo.credits.values()
+        )
+        if already_awarded:
+            return
+
+        # Verify this is the customer's first paid invoice (across all their
+        # subscriptions) by checking that no earlier invoice is paid.
+        customer_invoices = self.repo.invoices_for_customer(customer.id)
+        paid_invoices = sorted(
+            [inv for inv in customer_invoices if inv.status == InvoiceStatus.PAID],
+            key=lambda inv: inv.paid_on or date.min,
+        )
+        # The triggering invoice must be the first paid one.
+        if not paid_invoices or paid_invoices[0].id != invoice.id:
+            return
+
+        # Base = subtotal − discount.  Subtotal already includes plan + add-ons
+        # prorated the same way.  Exclude any portion paid via existing credits.
+        base = money(invoice.subtotal - invoice.discount_total - invoice.credit_applied)
+        if base <= 0:
+            return
+
+        raw_credit = money(base * REFERRAL_RATE)
+        credit_amount = min(raw_credit, MAX_REFERRAL_CREDIT)
+
+        # Find the referrer customer.
+        referrer = self.repo.customer_by_referral_code(customer.referred_by)
+        if referrer is None:
+            return
+
+        entry = CreditEntry(
+            id=self.repo.next_id("crd"),
+            customer_id=referrer.id,
+            source_customer_id=customer.id,
+            source_invoice_id=invoice.id,
+            amount=credit_amount,
+            remaining=credit_amount,
+            issued_on=paid_on,
+            expires_on=paid_on + timedelta(days=CREDIT_VALID_DAYS),
+            reason=f"Referral credit for customer {customer.id}",
+        )
+        self.repo.credits[entry.id] = entry
