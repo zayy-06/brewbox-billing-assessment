@@ -1,3 +1,4 @@
+
 from __future__ import annotations
 
 import calendar
@@ -173,9 +174,12 @@ class BillingService:
             for code in subscription.addon_codes
         ]
 <<<<<<< HEAD
+<<<<<<< HEAD
         subtotal = money(plan_amount + sum((amount for _, amount in addon_amounts), Decimal("0")))
         # BUG-101: Discounts apply to the plan amount only, not add-ons.
 =======
+=======
+>>>>>>> bugfix/BUG-103-late-fee-grace
         subtotal = money(
             plan_amount
             + sum((amount for _, amount in addon_amounts), Decimal("0"))
@@ -262,8 +266,11 @@ class BillingService:
             return invoice
         if invoice.amount_due <= 0:
             return invoice
-        if day < invoice.due_on + timedelta(days=5):
+
+        # Five full grace days after the due date; fee starts on day six.
+        if day <= invoice.due_on + timedelta(days=5):
             return invoice
+
         if invoice.late_fee > 0:
             return invoice
 
