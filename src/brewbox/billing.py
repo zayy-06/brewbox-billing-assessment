@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 
 import calendar
@@ -9,12 +8,9 @@ from typing import Callable
 from .models import (
     CREDIT_VALID_DAYS,
     LATE_FEE,
-<<<<<<< HEAD
     MAX_DISCOUNT_PERCENT,
-=======
     MAX_REFERRAL_CREDIT,
     REFERRAL_RATE,
->>>>>>> origin/feature/FEAT-202-referral-credits
     TAX_RATE,
     CreditEntry,
     Customer,
@@ -111,7 +107,8 @@ class BillingService:
         discount = Decimal(str(discount_percent))
         if discount < 0:
             raise ValueError("discount cannot be negative")
-        if discount > Decimal("30"):
+        # BUG-101: Enforce configured maximum discount using constant.
+        if discount > MAX_DISCOUNT_PERCENT:
             raise ValueError("discount cannot exceed 30 percent")
 
         subscription = Subscription(
@@ -169,26 +166,12 @@ class BillingService:
         plan = self.repo.plans[subscription.plan_code]
         days_in_month = calendar.monthrange(year, month)[1]
 
-<<<<<<< HEAD
-        # Mid-month starts use actual calendar days.
-        if subscription.start_date <= period_start:
-            factor = Decimal("1")
-        else:
-            billable_days = self._active_days(
-                subscription, period_start, period_end
-            )
-            days_in_month = Decimal(
-                str(calendar.monthrange(year, month)[1])
-            )
-            factor = Decimal(billable_days) / days_in_month
-=======
-        # Proration factor: active days / actual calendar days in the month.
-        # A full month (active_days == days_in_month) uses factor = 1 exactly.
+        # BUG-102 & FEAT-201: Proration factor using actual calendar days.
+        # A full month (active_days == days_in_month) uses factor = 1 exactly to avoid rounding drift.
         if active_days == days_in_month:
             factor = Decimal("1")
         else:
             factor = Decimal(active_days) / Decimal(str(days_in_month))
->>>>>>> origin/feature/FEAT-201-pause-resume
 
         plan_amount = money(plan.monthly_price * factor)
         addon_amounts = [
@@ -198,27 +181,11 @@ class BillingService:
             )
             for code in subscription.addon_codes
         ]
-<<<<<<< HEAD
-<<<<<<< HEAD
-<<<<<<< HEAD
-        subtotal = money(plan_amount + sum((amount for _, amount in addon_amounts), Decimal("0")))
-        # BUG-101: Discounts apply to the plan amount only, not add-ons.
-=======
-=======
->>>>>>> bugfix/BUG-103-late-fee-grace
-=======
->>>>>>> origin/feature/FEAT-201-pause-resume
         subtotal = money(
             plan_amount
             + sum((amount for _, amount in addon_amounts), Decimal("0"))
         )
-<<<<<<< HEAD
-
-        # Discount is currently calculated from the whole recurring subtotal.
->>>>>>> bugfix/BUG-102-calendar-proration
-=======
         # BUG-101: Discounts apply to the plan amount only, not add-ons.
->>>>>>> origin/feature/FEAT-201-pause-resume
         discount_total = money(
             plan_amount * subscription.discount_percent / Decimal("100")
         )
@@ -299,14 +266,9 @@ class BillingService:
         if invoice.amount_due <= 0:
             return invoice
 
-<<<<<<< HEAD
-        # Five full grace days after the due date; fee starts on day six.
-=======
         # BUG-103: Five full grace days after the due date; fee starts on day six.
->>>>>>> origin/feature/FEAT-201-pause-resume
         if day <= invoice.due_on + timedelta(days=5):
             return invoice
-
         if invoice.late_fee > 0:
             return invoice
 
@@ -413,8 +375,7 @@ class BillingService:
 
         today = self._today()
 
-        # Find the pause that contains the resume date, or the earliest future
-        # pause if none contains 'on'.
+        # Find the pause that contains the resume date.
         active_pause: PausePeriod | None = None
         active_index: int = -1
         for idx, pause in enumerate(subscription.pauses):
